@@ -29,7 +29,8 @@ namespace RPiVoice
         private SpeechRecognizer recognizer;
         
         private const int PUMP_PIN = 24;
-        private const int BLOW_INTERVAL = 5;
+        private const int BLOW_INTERVAL = 2000;
+
         private bool isBlowing = false;
         // GPIO 
         private static GpioController gpio = null;
@@ -80,10 +81,12 @@ namespace RPiVoice
             dictatorPin.SetDriveMode(GpioPinDriveMode.Output);
 
             // Write low initially, this step is not needed
-            dictatorPin.Write(GpioPinValue.Low);
-            tmr = new DispatcherTimer();
-            tmr.Interval = TimeSpan.FromMilliseconds(BLOW_INTERVAL);
-            tmr.Tick += dictatorTimerHandle; 
+            //dictatorPin.Write(GpioPinValue.Low);
+            dictatorPin.Write(GpioPinValue.High);
+
+            //tmr = new DispatcherTimer();
+            //tmr.Interval = TimeSpan.FromMilliseconds(BLOW_INTERVAL);
+            //tmr.Tick += dictatorTimerHandle; 
 
         }
         // Control Gpio Pins
@@ -91,9 +94,21 @@ namespace RPiVoice
         {
            await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
                 isBlowing = true;
-                dictatorPin.Write(GpioPinValue.High);
-                tmr.Start();
+                //dictatorPin.Write(GpioPinValue.High);
+                dictatorPin.Write(GpioPinValue.Low);
+
+                //tmr.Start();
                 MyMediaElement.Play();
+            });
+        }
+
+
+        private async void blowStop()
+        {
+            await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
+                isBlowing = false;
+                dictatorPin.Write(GpioPinValue.High);
+                MyMediaElement.Stop();
             });
         }
 
@@ -122,23 +137,29 @@ namespace RPiVoice
         private void RecognizerStateChanged(SpeechRecognizer sender, SpeechRecognizerStateChangedEventArgs args)
         {
             Debug.WriteLine("Speech recognizer state: " + args.State.ToString());
-            if (args.State.ToString() == "SoundStarted") playme();
+            //if (args.State.ToString() == "SoundStarted") playme();
 
         }
 
         // Initialize Speech Recognizer and start async recognition
-        private void playme()
+        private void playmeStart()
         {
             if(!isBlowing)blow();
         }
-        private async void dictatorTimerHandle(object sender, object e) {
-            await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
-                dictatorPin.Write(GpioPinValue.Low);
-                MyMediaElement.Stop();
-                tmr.Stop(); // Manually stop timer, or let run indefinitely
-                isBlowing = false;
-            });
+
+        private void playmeStop()
+        {
+            if(isBlowing)blowStop();
         }
+        //private async void dictatortimerhandle(object sender, object e) {
+        //    await dispatcher.runasync(windows.ui.core.coredispatcherpriority.normal, () => {
+        //        //dictatorpin.write(gpiopinvalue.low);
+        //        dictatorpin.write(gpiopinvalue.high);
+        //        mymediaelement.stop();
+        //        //tmr.stop(); // manually stop timer, or let run indefinitely
+        //        isblowing = false;
+        //    });
+        //}
 
         /// <summary>
         /// Initialize Speech Recognizer and compile constraints.
@@ -227,7 +248,7 @@ namespace RPiVoice
             // Update the textbox with the currently confirmed text, and the hypothesis combined.
             string textboxContent = dictatedTextBuilder.ToString() + " " + hypothesis + " ...";
             Debug.WriteLine(textboxContent);
-            playme();
+            playmeStart();
             // if(textboxContent.Length >= 80)initializeDictator();
             // await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
             // {
@@ -293,6 +314,12 @@ namespace RPiVoice
         private void SpeechRecognizer_StateChanged(SpeechRecognizer sender, SpeechRecognizerStateChangedEventArgs args)
         {
             Debug.WriteLine(args.State.ToString());
+
+            if ((args.State.ToString() == "SoundEnded"))
+            { 
+                playmeStop();
+            }
+
             //  await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => {
 
             // rootPage.NotifyUser(args.State.ToString(), NotifyType.StatusMessage);
