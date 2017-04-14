@@ -20,19 +20,27 @@ using Windows.Globalization;
 namespace RPiVoice
 {
     /// <summary>
-    /// An empty page that can be used on its own or navigated to within a Frame.
-    /// </summary>
+       /// An empty page that can be used on its own or navigated to within a Frame.
+       /// </summary>
     public sealed partial class MainPage : Page
     {
 
         // Speech Recognizer
         private SpeechRecognizer recognizer;
-        
+
         private const int PUMP_PIN = 24;
         private const int BLOW_INTERVAL = 2000;
 
-        private bool isBlowing = false;
-        // GPIO 
+        private bool is_silent = true;
+        private bool timer_started = true;
+
+        private const int DOOR_PIN = 25;
+        private GpioPinValue doorPin;
+
+        
+
+
+        // GPIO
         private static GpioController gpio = null;
         // GPIO Pin for RED Led
         private static GpioPin dictatorPin = null;
@@ -46,6 +54,36 @@ namespace RPiVoice
         private StringBuilder dictatedTextBuilder;
 
 
+        private bool dictator_status;
+
+        private string doorOpen = "door open";
+        private string doorClosed = "running";
+
+        private string door_status;
+        
+
+
+        private bool set_dictator_status(bool value)
+        {
+            dictator_status = value;
+            return ;
+        }
+
+        private bool get_dictator_status()
+        {
+            return dictator_status;
+        }
+
+        private void get_door_status()
+        {
+
+            if ( doorPin == GpioPinValue.H)
+                door_status == doorOpen;
+        
+            else if (doorPin == GpioPinValue.High)
+                door_status == doorClosed;
+        }
+
         public MainPage()
         {
             this.InitializeComponent();
@@ -54,12 +92,41 @@ namespace RPiVoice
 
             // Initialize Recognizer
             initializeGPIO();
-            initializeDictator();
+            while (True)
+                door_status = get_door_status();
+            dictator_status = get_dictator_status();
+
+            if (door_status == "door_open") {
+                if (dictator_status == "running")
+                {
+                    kill_dictator();
+
+                    set_dictator_status(0); }
+                else if (dictator_status == "not_running") {
+                    time.sleep(1); #sleep one second 
+                 continue;
+                }
+            }
+            else if (door_status == "door_closed") {
+                if (dictator_status == "running") {
+                    time.sleep(1); #sleep one second
+                    }
+                continue; }
+            else if (dictator_status == "not_running") {
+                initializeDictator();
+                set_dictator_status(1);
+            }
         }
 
 
         // Release resources, stop recognizer, release pins, etc...
         private async void MainPage_Unloaded(object sender, object args)
+        {
+            // Stop recognizing, and kill dictator
+            kill_dictator();
+        }
+
+        private void kill_dictator()
         {
             // Stop recognizing
             await recognizer.ContinuousRecognitionSession.StopAsync();
@@ -80,35 +147,44 @@ namespace RPiVoice
             dictatorPin = gpio.OpenPin(PUMP_PIN);
             dictatorPin.SetDriveMode(GpioPinDriveMode.Output);
 
+            //Initialize GPIO Pins
+            doorPin = gpio.Open
+                Pin(DOOR_PIN);
+            doorPin.SetDriveMode(GpioPinDriveMode.Output);
+
             // Write low initially, this step is not needed
             //dictatorPin.Write(GpioPinValue.Low);
             dictatorPin.Write(GpioPinValue.High);
 
-            //tmr = new DispatcherTimer();
-            //tmr.Interval = TimeSpan.FromMilliseconds(BLOW_INTERVAL);
-            //tmr.Tick += dictatorTimerHandle; 
+            //set door pin defaults to low
+            doorPin.Write(GpioPinValue.Low);
 
         }
         // Control Gpio Pins
-        private async void blow()
+        private async void stop_sound()
         {
-           await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
-                isBlowing = true;
-                //dictatorPin.Write(GpioPinValue.High);
+            await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
+                is_silent = true;
                 dictatorPin.Write(GpioPinValue.Low);
-
                 //tmr.Start();
-                MyMediaElement.Play();
             });
         }
 
-
-        private async void blowStop()
+        private async void start_sound()
         {
             await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
-                isBlowing = false;
+                is_silent = false;
                 dictatorPin.Write(GpioPinValue.High);
-                MyMediaElement.Stop();
+            });
+        }
+
+        private async void start_sound_timed(object sender, object e)
+        {
+            await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
+                is_silent = false;
+                timer_started = false;
+                dictatorPin.Write(GpioPinValue.High);
+                tmr.stop(); // manually stop timer, or let run indefinitely
             });
         }
 
@@ -132,7 +208,7 @@ namespace RPiVoice
             await speechRecognizer.ContinuousRecognitionSession.StartAsync();
 
         }
-      
+
         // Recognizer state changed
         private void RecognizerStateChanged(SpeechRecognizer sender, SpeechRecognizerStateChangedEventArgs args)
         {
@@ -142,30 +218,28 @@ namespace RPiVoice
         }
 
         // Initialize Speech Recognizer and start async recognition
-        private void playmeStart()
+        private void stop_sound_controller()
         {
-            if(!isBlowing)blow();
+            if (!is_silent) stop_sound();
         }
 
-        private void playmeStop()
+        private void start_sound_controller(float interval)
         {
-            if(isBlowing)blowStop();
+            if (is_silent && !timer_started)
+            {
+                timer_started = true;
+                tmr = new DispatcherTimer();
+                tmr.Interval = TimeSpan.FromMilliseconds(interval);
+                tmr.Tick += start_sound_timed;
+            }
         }
-        //private async void dictatortimerhandle(object sender, object e) {
-        //    await dispatcher.runasync(windows.ui.core.coredispatcherpriority.normal, () => {
-        //        //dictatorpin.write(gpiopinvalue.low);
-        //        dictatorpin.write(gpiopinvalue.high);
-        //        mymediaelement.stop();
-        //        //tmr.stop(); // manually stop timer, or let run indefinitely
-        //        isblowing = false;
-        //    });
-        //}
+
 
         /// <summary>
-        /// Initialize Speech Recognizer and compile constraints.
-        /// </summary>
-        /// <param name="recognizerLanguage">Language to use for the speech recognizer</param>
-        /// <returns>Awaitable task.</returns>
+               /// Initialize Speech Recognizer and compile constraints.
+               /// </summary>
+               /// <param name="recognizerLanguage">Language to use for the speech recognizer</param>
+               /// <returns>Awaitable task.</returns>
         private async Task InitializeRecognizer()
         {
             // await InitializeRecognizer(SpeechRecognizer.SystemSpeechLanguage);
@@ -208,16 +282,16 @@ namespace RPiVoice
         }
 
         /// <summary>
-        /// Handle events fired when error conditions occur, such as the microphone becoming unavailable, or if
-        /// some transient issues occur.
-        /// </summary>
-        /// <param name="sender">The continuous recognition session</param>
-        /// <param name="args">The state of the recognizer</param>
+               /// Handle events fired when error conditions occur, such as the microphone becoming unavailable, or if
+               /// some transient issues occur.
+               /// </summary>
+               /// <param name="sender">The continuous recognition session</param>
+               /// <param name="args">The state of the recognizer</param>
         private void ContinuousRecognitionSession_Completed(SpeechContinuousRecognitionSession sender, SpeechContinuousRecognitionCompletedEventArgs args)
         {
             if (args.Status != SpeechRecognitionResultStatus.Success)
             {
-                // If TimeoutExceeded occurs, the user has been silent for too long. We can use this to 
+                // If TimeoutExceeded occurs, the user has been silent for too long. We can use this to
                 // cancel recognition if the user in dictation mode and walks away from their device, etc.
                 // In a global-command type scenario, this timeout won't apply automatically.
                 // With dictation (no grammar in place) modes, the default timeout is 20 seconds.
@@ -237,10 +311,10 @@ namespace RPiVoice
         }
 
         /// <summary>
-        /// While the user is speaking, update the textbox with the partial sentence of what's being said for user feedback.
-        /// </summary>
-        /// <param name="sender">The recognizer that has generated the hypothesis</param>
-        /// <param name="args">The hypothesis formed</param>
+               /// While the user is speaking, update the textbox with the partial sentence of what's being said for user feedback.
+               /// </summary>
+               /// <param name="sender">The recognizer that has generated the hypothesis</param>
+               /// <param name="args">The hypothesis formed</param>
         private void SpeechRecognizer_HypothesisGenerated(SpeechRecognizer sender, SpeechRecognitionHypothesisGeneratedEventArgs args)
         {
             string hypothesis = args.Hypothesis.Text;
@@ -248,38 +322,38 @@ namespace RPiVoice
             // Update the textbox with the currently confirmed text, and the hypothesis combined.
             string textboxContent = dictatedTextBuilder.ToString() + " " + hypothesis + " ...";
             Debug.WriteLine(textboxContent);
-            playmeStart();
+            stop_sound_controller();
             // if(textboxContent.Length >= 80)initializeDictator();
             // await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
             // {
-            //     //dictationTextBox.Text = textboxContent;
-            //     //btnClearText.IsEnabled = true;
+            //     //dictationTextBox.Text = textboxContent;
+            //     //btnClearText.IsEnabled = true;
             // });
         }
 
         /// <summary>
-        /// Handle events fired when a result is generated. Check for high to medium confidence, and then append the
-        /// string to the end of the stringbuffer, and replace the content of the textbox with the string buffer, to
-        /// remove any hypothesis text that may be present.
-        /// </summary>
-        /// <param name="sender">The Recognition session that generated this result</param>
-        /// <param name="args">Details about the recognized speech</param>
+               /// Handle events fired when a result is generated. Check for high to medium confidence, and then append the
+               /// string to the end of the stringbuffer, and replace the content of the textbox with the string buffer, to
+               /// remove any hypothesis text that may be present.
+               /// </summary>
+               /// <param name="sender">The Recognition session that generated this result</param>
+               /// <param name="args">Details about the recognized speech</param>
         private void ContinuousRecognitionSession_ResultGenerated(SpeechContinuousRecognitionSession sender, SpeechContinuousRecognitionResultGeneratedEventArgs args)
         {
             // We may choose to discard content that has low confidence, as that could indicate that we're picking up
             // noise via the microphone, or someone could be talking out of earshot.
             if (args.Result.Confidence == SpeechRecognitionConfidence.Medium ||
-                args.Result.Confidence == SpeechRecognitionConfidence.High)
+ args.Result.Confidence == SpeechRecognitionConfidence.High)
             {
                 dictatedTextBuilder.Append(args.Result.Text + " ");
 
                 Debug.WriteLine(dictatedTextBuilder.ToString());
                 // await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
                 // {
-                //     //discardedTextBlock.Visibility = Windows.UI.Xaml.Visibility.Collapsed;
+                //     //discardedTextBlock.Visibility = Windows.UI.Xaml.Visibility.Collapsed;
 
-                //     //dictationTextBox.Text = dictatedTextBuilder.ToString();
-                //     //btnClearText.IsEnabled = true;
+                //     //dictationTextBox.Text = dictatedTextBuilder.ToString();
+                //     //btnClearText.IsEnabled = true;
                 // });
             }
             else
@@ -307,20 +381,20 @@ namespace RPiVoice
         }
 
         /// <summary>
-        /// Provide feedback to the user based on whether the recognizer is receiving their voice input.
-        /// </summary>
-        /// <param name="sender">The recognizer that is currently running.</param>
-        /// <param name="args">The current state of the recognizer.</param>
+               /// Provide feedback to the user based on whether the recognizer is receiving their voice input.
+               /// </summary>
+               /// <param name="sender">The recognizer that is currently running.</param>
+               /// <param name="args">The current state of the recognizer.</param>
         private void SpeechRecognizer_StateChanged(SpeechRecognizer sender, SpeechRecognizerStateChangedEventArgs args)
         {
             Debug.WriteLine(args.State.ToString());
 
             if ((args.State.ToString() == "SoundEnded"))
-            { 
-                playmeStop();
+            {
+                start_sound_controller();
             }
 
-            //  await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => {
+            //  await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => {
 
             // rootPage.NotifyUser(args.State.ToString(), NotifyType.StatusMessage);
             // });
@@ -329,3 +403,4 @@ namespace RPiVoice
 
     }
 }
+

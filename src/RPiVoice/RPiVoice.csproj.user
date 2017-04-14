@@ -8,7 +8,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|ARM'">
     <DeviceId>30F105C9-681E-420b-A277-7C086EAD8A4E</DeviceId>
     <UseEmulator>false</UseEmulator>
-    <RemoteDebugMachine>192.168.137.252</RemoteDebugMachine>
+    <RemoteDebugMachine>169.254.141.61</RemoteDebugMachine>
     <RemoteDebugEnabled>true</RemoteDebugEnabled>
     <UseAuthentication>true</UseAuthentication>
     <CreateCleanLayout>false</CreateCleanLayout>
