@@ -1,20 +1,11 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Text;
 using System.Threading.Tasks;
-using System.Threading;
 using System.Diagnostics;
-using System.Net.Http;
-using Windows.ApplicationModel;
 using Windows.Devices.Gpio;
 using Windows.Media.SpeechRecognition;
-using Windows.Media.SpeechSynthesis;
-using Windows.Storage;
-using Windows.UI.Core;
 using Windows.UI.Xaml;
 using Windows.UI.Xaml.Controls;
-using Windows.Globalization;
 // The Blank Page item template is documented at http://go.microsoft.com/fwlink/?LinkId=402352&clcid=0x409
 
 namespace RPiVoice
@@ -31,18 +22,16 @@ namespace RPiVoice
         private const int PUMP_PIN = 24;
         private const int BLOW_INTERVAL = 2000;
 
+        private const int DOOR_PIN = 25;
+
         private bool is_silent = true;
         private bool timer_started = true;
-
-        private const int DOOR_PIN = 25;
-        private GpioPinValue doorPin;
-
-        
 
 
         // GPIO
         private static GpioController gpio = null;
         // GPIO Pin for RED Led
+        private static GpioPin doorPin = null;
         private static GpioPin dictatorPin = null;
         private DispatcherTimer tmr = null;
 
@@ -53,20 +42,17 @@ namespace RPiVoice
         // that we can combine it and Hypothesized results to show in-progress dictation mid-sentence.
         private StringBuilder dictatedTextBuilder;
 
+        private bool door_status;
+        private bool door_open = true;
+        private bool door_closed = false;
 
         private bool dictator_status;
+        private bool running = true;
+        private bool not_running = false;
 
-        private string doorOpen = "door open";
-        private string doorClosed = "running";
-
-        private string door_status;
-        
-
-
-        private bool set_dictator_status(bool value)
+        private void set_dictator_status(bool status)
         {
-            dictator_status = value;
-            return ;
+            dictator_status = status;
         }
 
         private bool get_dictator_status()
@@ -74,14 +60,16 @@ namespace RPiVoice
             return dictator_status;
         }
 
-        private void get_door_status()
+        private bool get_door_status()
         {
 
-            if ( doorPin == GpioPinValue.H)
-                door_status == doorOpen;
-        
-            else if (doorPin == GpioPinValue.High)
-                door_status == doorClosed;
+            if (doorPin.Read() == GpioPinValue.High)
+                return door_open;
+            Debug.WriteLine("Door has been opened.");
+
+            // doorPin == GpioPinValue.Low)
+            return door_closed;
+            Debug.WriteLine("Door has been closed.");
         }
 
         public MainPage()
@@ -92,32 +80,41 @@ namespace RPiVoice
 
             // Initialize Recognizer
             initializeGPIO();
-            while (True)
+            while (true)
+            {
                 door_status = get_door_status();
-            dictator_status = get_dictator_status();
+                dictator_status = get_dictator_status();
 
-            if (door_status == "door_open") {
-                if (dictator_status == "running")
+                if (door_status == door_open)
                 {
-                    kill_dictator();
-
-                    set_dictator_status(0); }
-                else if (dictator_status == "not_running") {
-                    time.sleep(1); #sleep one second 
-                 continue;
+                    if (dictator_status == running)
+                    {
+                        kill_dictator();
+                        set_dictator_status(not_running);
+                        Debug.WriteLine("Door Opened. Killing Dictator");
+                    }
+                    else if (dictator_status == not_running)
+                    {
+                        Task.Delay(TimeSpan.FromSeconds(1)).Wait();
+                        continue;
+                    }
+                }
+                else if (door_status == door_closed)
+                {
+                    if (dictator_status == running)
+                    {
+                        Task.Delay(TimeSpan.FromSeconds(1)).Wait();
+                        continue;
+                    }
+                    else if (dictator_status == not_running)
+                    {
+                        initializeDictator();
+                        Debug.WriteLine("Dictator not running.  Starting Dictator.");
+                        set_dictator_status(running);
+                    }
                 }
             }
-            else if (door_status == "door_closed") {
-                if (dictator_status == "running") {
-                    time.sleep(1); #sleep one second
-                    }
-                continue; }
-            else if (dictator_status == "not_running") {
-                initializeDictator();
-                set_dictator_status(1);
-            }
         }
-
 
         // Release resources, stop recognizer, release pins, etc...
         private async void MainPage_Unloaded(object sender, object args)
@@ -126,7 +123,7 @@ namespace RPiVoice
             kill_dictator();
         }
 
-        private void kill_dictator()
+        private async void kill_dictator()
         {
             // Stop recognizing
             await recognizer.ContinuousRecognitionSession.StopAsync();
@@ -147,10 +144,10 @@ namespace RPiVoice
             dictatorPin = gpio.OpenPin(PUMP_PIN);
             dictatorPin.SetDriveMode(GpioPinDriveMode.Output);
 
-            //Initialize GPIO Pins
-            doorPin = gpio.Open
-                Pin(DOOR_PIN);
+            //Initialize GPIO Pin
+            doorPin = gpio.OpenPin(DOOR_PIN);
             doorPin.SetDriveMode(GpioPinDriveMode.Output);
+
 
             // Write low initially, this step is not needed
             //dictatorPin.Write(GpioPinValue.Low);
@@ -184,7 +181,7 @@ namespace RPiVoice
                 is_silent = false;
                 timer_started = false;
                 dictatorPin.Write(GpioPinValue.High);
-                tmr.stop(); // manually stop timer, or let run indefinitely
+                //tmr.stop(); // manually stop timer, or let run indefinitely
             });
         }
 
@@ -229,7 +226,7 @@ namespace RPiVoice
             {
                 timer_started = true;
                 tmr = new DispatcherTimer();
-                tmr.Interval = TimeSpan.FromMilliseconds(interval);
+                tmr.Interval = TimeSpan.FromSeconds(interval);
                 tmr.Tick += start_sound_timed;
             }
         }
@@ -391,7 +388,7 @@ namespace RPiVoice
 
             if ((args.State.ToString() == "SoundEnded"))
             {
-                start_sound_controller();
+                start_sound_controller(100.0f);
             }
 
             //  await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => {

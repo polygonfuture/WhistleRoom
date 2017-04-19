@@ -8,11 +8,12 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|ARM'">
     <DeviceId>30F105C9-681E-420b-A277-7C086EAD8A4E</DeviceId>
     <UseEmulator>false</UseEmulator>
-    <RemoteDebugMachine>169.254.141.61</RemoteDebugMachine>
+    <RemoteDebugMachine>192.168.137.225</RemoteDebugMachine>
     <RemoteDebugEnabled>true</RemoteDebugEnabled>
     <UseAuthentication>true</UseAuthentication>
-    <CreateCleanLayout>false</CreateCleanLayout>
+    <CreateCleanLayout>true</CreateCleanLayout>
     <AuthenticationMode>Universal</AuthenticationMode>
+    <LayoutDir>C:\Users\jmoor\Documents\iotProjects\TimerGPIOpiVoiceFabio\src\</LayoutDir>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Release|ARM'">
     <DeviceId>30F105C9-681E-420b-A277-7C086EAD8A4E</DeviceId>
