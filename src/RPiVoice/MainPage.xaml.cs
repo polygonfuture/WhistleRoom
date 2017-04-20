@@ -16,16 +16,13 @@ namespace RPiVoice
     public sealed partial class MainPage : Page
     {
 
-        // Speech Recognizer
-        private SpeechRecognizer recognizer;
-
         private const int PUMP_PIN = 24;
         private const int BLOW_INTERVAL = 2000;
 
         private const int DOOR_PIN = 25;
 
         private bool is_silent = true;
-        private bool timer_started = true;
+        private bool timer_started = false;
 
 
         // GPIO
@@ -35,14 +32,13 @@ namespace RPiVoice
         private static GpioPin dictatorPin = null;
         private DispatcherTimer tmr = null;
 
-        // The speech recognizer used throughout this sample.
+        // Speech Recognizer
         private SpeechRecognizer speechRecognizer;
 
         // Keep track of existing text that we've accepted in ContinuousRecognitionSession_ResultGenerated(), so
         // that we can combine it and Hypothesized results to show in-progress dictation mid-sentence.
         private StringBuilder dictatedTextBuilder;
 
-        private bool door_status;
         private bool door_open = true;
         private bool door_closed = false;
 
@@ -60,16 +56,14 @@ namespace RPiVoice
             return dictator_status;
         }
 
-        private bool get_door_status()
+        private bool get_door_status(String value)
         {
-
-            if (doorPin.Read() == GpioPinValue.High)
-                return door_open;
-            Debug.WriteLine("Door has been opened.");
-
-            // doorPin == GpioPinValue.Low)
-            return door_closed;
-            Debug.WriteLine("Door has been closed.");
+            if (value == "FallingEdge")
+            {
+                return door_closed;
+            }
+            // else it must be RisingEdge aka door open
+            return door_open;
         }
 
         public MainPage()
@@ -78,61 +72,78 @@ namespace RPiVoice
 
             Unloaded += MainPage_Unloaded;
 
-            // Initialize Recognizer
+            // Initialize GPIO
             initializeGPIO();
-            while (true)
-            {
-                door_status = get_door_status();
-                dictator_status = get_dictator_status();
+            
+            // Initialize Recognizer
+            initialize_dictator();
+        }
 
-                if (door_status == door_open)
+        private void door_event(GpioPin sender, GpioPinValueChangedEventArgs args)
+        {
+            System.Diagnostics.Debug.WriteLine("Door event with value: " + args.Edge.ToString());
+
+            bool door_status = get_door_status(args.Edge.ToString());
+            dictator_status = get_dictator_status();
+           
+            if (door_status == door_open)
+            {
+                if (dictator_status == running)
                 {
-                    if (dictator_status == running)
-                    {
-                        kill_dictator();
-                        set_dictator_status(not_running);
-                        Debug.WriteLine("Door Opened. Killing Dictator");
-                    }
-                    else if (dictator_status == not_running)
-                    {
-                        Task.Delay(TimeSpan.FromSeconds(1)).Wait();
-                        continue;
-                    }
+                    stop_dictator_recognition();
+                    set_dictator_status(not_running);
+                    Debug.WriteLine("Door Opened. Killing Dictator");
                 }
-                else if (door_status == door_closed)
+            }
+            else if (door_status == door_closed)
+            {
+                if (dictator_status == not_running)
                 {
-                    if (dictator_status == running)
-                    {
-                        Task.Delay(TimeSpan.FromSeconds(1)).Wait();
-                        continue;
-                    }
-                    else if (dictator_status == not_running)
-                    {
-                        initializeDictator();
-                        Debug.WriteLine("Dictator not running.  Starting Dictator.");
-                        set_dictator_status(running);
-                    }
+                    initialize_dictator();
+                    Debug.WriteLine("Dictator not running.  Starting Dictator.");
+                    set_dictator_status(running);
                 }
             }
         }
 
-        // Release resources, stop recognizer, release pins, etc...
-        private async void MainPage_Unloaded(object sender, object args)
+        private void dictator_event(GpioPin sender, GpioPinValueChangedEventArgs args)
         {
-            // Stop recognizing, and kill dictator
-            kill_dictator();
+            System.Diagnostics.Debug.WriteLine("Door event with value: " + args.Edge.ToString());
         }
 
-        private async void kill_dictator()
+        // Release resources, stop recognizer, release pins, etc...
+        private void MainPage_Unloaded(object sender, object args)
         {
-            // Stop recognizing
-            await recognizer.ContinuousRecognitionSession.StopAsync();
+            stop_dictator_recognition();
+
+            this.speechRecognizer.Dispose();
+            this.speechRecognizer = null;
+        }
+
+        private async void stop_dictator_recognition()
+        {
+            try
+            {
+                Debug.WriteLine("Stopping dictator recognition");
+                if (speechRecognizer.State != SpeechRecognizerState.Idle)
+                {
+                    await speechRecognizer.ContinuousRecognitionSession.CancelAsync();
+                }
+                else
+                {
+                    await speechRecognizer.ContinuousRecognitionSession.StopAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine("Failed to terminate dictator speech recognition");
+                Debug.WriteLine(ex.ToString());
+            }
+
 
             // Release pins
-            dictatorPin = null;
-            recognizer.Dispose();
-
-            recognizer = null;
+            //dictatorPin.Dispose();
+            //doorPin.Dispose();
         }
 
         private void initializeGPIO()
@@ -146,7 +157,7 @@ namespace RPiVoice
 
             //Initialize GPIO Pin
             doorPin = gpio.OpenPin(DOOR_PIN);
-            doorPin.SetDriveMode(GpioPinDriveMode.Output);
+            doorPin.SetDriveMode(GpioPinDriveMode.InputPullUp);
 
 
             // Write low initially, this step is not needed
@@ -155,6 +166,12 @@ namespace RPiVoice
 
             //set door pin defaults to low
             doorPin.Write(GpioPinValue.Low);
+            //Ignore changes in value of less than 200ms
+            doorPin.DebounceTimeout = new TimeSpan(0, 0, 0, 0, 50);
+
+            // Set events
+            dictatorPin.ValueChanged += dictator_event;
+            doorPin.ValueChanged += door_event;
 
         }
         // Control Gpio Pins
@@ -163,16 +180,62 @@ namespace RPiVoice
             await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
                 is_silent = true;
                 dictatorPin.Write(GpioPinValue.Low);
-                //tmr.Start();
             });
         }
 
-        private async void start_sound()
+
+        // Initialize Speech Recognizer and start async recognition
+        private async void initialize_dictator()
         {
-            await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
-                is_silent = false;
-                dictatorPin.Write(GpioPinValue.High);
-            });
+            if (true)
+            {
+                if (dictatedTextBuilder != null)
+                {
+                    dictatedTextBuilder.Clear();
+                }
+                else
+                {
+                    dictatedTextBuilder = new StringBuilder();
+                }
+
+                // Initialize recognizer
+                await InitializeRecognizer();
+
+                await speechRecognizer.ContinuousRecognitionSession.StartAsync();
+            }
+        }
+
+        // Recognizer state changed
+        private void RecognizerStateChanged(SpeechRecognizer sender, SpeechRecognizerStateChangedEventArgs args)
+        {
+            Debug.WriteLine("Speech recognizer state: " + args.State.ToString());
+        }
+
+        // Initialize Speech Recognizer and start async recognition
+        private void stop_sound_controller()
+        {
+            Debug.WriteLine("stop_sound_controller (is_silent): " + is_silent);
+            if (!is_silent) stop_sound();
+        }
+
+        private async void start_sound_controller(float interval)
+        {
+            if (is_silent && !timer_started)
+            {
+                Debug.WriteLine("Starting a timer which will run start_sound_timed after: " + interval + " seconds.");
+                await Dispatcher.RunAsync(Windows.UI.Core.CoreDispatcherPriority.Normal, () => {
+                    timer_started = true;
+                    tmr = new DispatcherTimer();
+                    tmr.Interval = TimeSpan.FromSeconds(interval);
+                    tmr.Tick += start_sound_timed;
+                    tmr.Start();
+                });
+
+            }
+            else
+            {
+                Debug.WriteLine("Not starting the sound playing timer because (is_silent, timer_started): " + is_silent + " " + timer_started);
+            }
         }
 
         private async void start_sound_timed(object sender, object e)
@@ -181,57 +244,10 @@ namespace RPiVoice
                 is_silent = false;
                 timer_started = false;
                 dictatorPin.Write(GpioPinValue.High);
-                //tmr.stop(); // manually stop timer, or let run indefinitely
+                Debug.WriteLine("DICTATOR PIN ALARM TRIGGERED!!!!");
+                // start sounds?
             });
         }
-
-        // Initialize Speech Recognizer and start async recognition
-        private async void initializeDictator()
-        {
-            if (dictatedTextBuilder != null)
-            {
-                dictatedTextBuilder.Clear();
-            }
-            else
-            {
-                dictatedTextBuilder = new StringBuilder();
-            }
-
-
-            // Initialize recognizer
-            await InitializeRecognizer();
-
-
-            await speechRecognizer.ContinuousRecognitionSession.StartAsync();
-
-        }
-
-        // Recognizer state changed
-        private void RecognizerStateChanged(SpeechRecognizer sender, SpeechRecognizerStateChangedEventArgs args)
-        {
-            Debug.WriteLine("Speech recognizer state: " + args.State.ToString());
-            //if (args.State.ToString() == "SoundStarted") playme();
-
-        }
-
-        // Initialize Speech Recognizer and start async recognition
-        private void stop_sound_controller()
-        {
-            if (!is_silent) stop_sound();
-        }
-
-        private void start_sound_controller(float interval)
-        {
-            if (is_silent && !timer_started)
-            {
-                timer_started = true;
-                tmr = new DispatcherTimer();
-                tmr.Interval = TimeSpan.FromSeconds(interval);
-                tmr.Tick += start_sound_timed;
-            }
-        }
-
-
         /// <summary>
                /// Initialize Speech Recognizer and compile constraints.
                /// </summary>
@@ -296,7 +312,7 @@ namespace RPiVoice
                 {
                     Debug.WriteLine("Automatic Time Out of Dictation");
                     Debug.WriteLine(dictatedTextBuilder.ToString());
-                    initializeDictator();
+                    initialize_dictator();
 
                 }
                 else
@@ -320,7 +336,7 @@ namespace RPiVoice
             string textboxContent = dictatedTextBuilder.ToString() + " " + hypothesis + " ...";
             Debug.WriteLine(textboxContent);
             stop_sound_controller();
-            // if(textboxContent.Length >= 80)initializeDictator();
+            // if(textboxContent.Length >= 80)initialize_dictator();
             // await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () =>
             // {
             //     //dictationTextBox.Text = textboxContent;
@@ -339,8 +355,7 @@ namespace RPiVoice
         {
             // We may choose to discard content that has low confidence, as that could indicate that we're picking up
             // noise via the microphone, or someone could be talking out of earshot.
-            if (args.Result.Confidence == SpeechRecognitionConfidence.Medium ||
- args.Result.Confidence == SpeechRecognitionConfidence.High)
+            if (args.Result.Confidence == SpeechRecognitionConfidence.Medium || args.Result.Confidence == SpeechRecognitionConfidence.High)
             {
                 dictatedTextBuilder.Append(args.Result.Text + " ");
 
@@ -384,11 +399,11 @@ namespace RPiVoice
                /// <param name="args">The current state of the recognizer.</param>
         private void SpeechRecognizer_StateChanged(SpeechRecognizer sender, SpeechRecognizerStateChangedEventArgs args)
         {
-            Debug.WriteLine(args.State.ToString());
+            Debug.WriteLine("   " + args.State.ToString());
 
             if ((args.State.ToString() == "SoundEnded"))
             {
-                start_sound_controller(100.0f);
+                start_sound_controller(10.0f);
             }
 
             //  await dispatcher.RunAsync(CoreDispatcherPriority.Normal, () => {
