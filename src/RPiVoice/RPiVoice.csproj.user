@@ -11,7 +11,7 @@
     <RemoteDebugMachine>192.168.137.225</RemoteDebugMachine>
     <RemoteDebugEnabled>true</RemoteDebugEnabled>
     <UseAuthentication>true</UseAuthentication>
-    <CreateCleanLayout>true</CreateCleanLayout>
+    <CreateCleanLayout>false</CreateCleanLayout>
     <AuthenticationMode>Universal</AuthenticationMode>
     <LayoutDir>C:\Users\jmoor\Documents\iotProjects\TimerGPIOpiVoiceFabio\src\</LayoutDir>
   </PropertyGroup>
